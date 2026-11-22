@@ -1,0 +1,10 @@
+{
+  "id": "collaboration",
+  "name": "Collaboration",
+  "version": "1.0.0",
+  "minAppVersion": "1.13.0",
+  "description": "Share folders and edit them together in real time, end-to-end encrypted, through a server you host.",
+  "author": "9ostudio",
+  "authorUrl": "https://github.com/9ostudio",
+  "isDesktopOnly": false
+}
