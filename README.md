@@ -1,6 +1,6 @@
 # obsidian-collaboration-client
 
-Real-time end-to-end encrypted shared folders for Obsidian with permission system for read / write / delete and a local folder sync between all user through obsidian.
+Self-Hosted Real-time end-to-end encrypted shared folders for Obsidian with permission system for read / write / delete and a local folder sync between all user through obsidian.
 
 - Share a folder with an invite link, and it appears in the other person's vault.
 - Edit notes and canvases together in real time, even while the owner is offline.
