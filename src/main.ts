@@ -1,10 +1,10 @@
 import { App, FileSystemAdapter, Menu, Notice, Plugin, TAbstractFile, TFile, TFolder, normalizePath, requestUrl } from 'obsidian'
-import { Api, ApiError, normalizeServer, parseInvite, type HttpFn, type MemberRecord, type Perms } from './core/api'
+import { Api, ApiError, normalizeServer, parseInvite, type HttpFn, type MemberRecord, type Perms, type ShareSummary } from './core/api'
 import { Cipher, INVITE_PURPOSE, exportPublicKey, fromB64, fromB64Url, fromUtf8, generateDeviceKeys, newKey, openWithSecret, randomBytes, randomId, sealWithSecret, toB64, toB64Url, utf8, type Keyring } from './core/crypto'
 import { SyncEngine, isTextPath, type VaultIO } from './core/engine'
 import { buildVersions } from './core/history'
 import { LinkMirror, type MirrorState } from './core/mirror'
-import { ShareSession, type EventType } from './core/share'
+import { ShareSession, openSharedKey, type EventType } from './core/share'
 import { IdbStore } from './core/store'
 import { AttachmentRouter } from './attachments'
 import { CollaborationSettingTab } from './settings'
@@ -163,6 +163,7 @@ export default class CollaborationPlugin extends Plugin {
   private checking: Promise<void> | null = null
   private readonly deniedAt = new Map<string, number>()
   private readonly pendingKeyrings = new Map<string, Keyring>()
+  private readonly adopting = new Set<string>()
   private readonly desktop = desktopFS()
   private links: FolderLink[] = []
   private readonly mirrors = new Map<string, LinkMirror>()
@@ -354,6 +355,7 @@ export default class CollaborationPlugin extends Plugin {
           this.editors.scheduleRefresh()
           this.startLinks(record.id)
         })
+        void session.keepKeyForSelf(identity.publicKey).catch((err) => log('could not keep the key for other devices', err))
         this.updateStatus()
       },
       onResynced: () => { void engine?.retryPending() },
@@ -772,9 +774,45 @@ export default class CollaborationPlugin extends Plugin {
         if (!a) void this.startShare(record)
         else if (a.session.stalled) a.session.reconnect()
       }
+      for (const summary of list) {
+        if (!this.shares[summary.id] && (summary.role === 'owner' || summary.perms.read)) void this.adoptShare(summary)
+      }
       if (verbose) new Notice('Collaboration: access is up to date.')
     })()
     try { await this.checking } finally { this.checking = null }
+  }
+
+  private adoptPath (desired: string | null, name: string, shareId: string): string {
+    const overlaps = (p: string): boolean => Object.values(this.shares).some((s) => s.id !== shareId && (under(p, s.path) || under(s.path, p)))
+    if (desired && !overlaps(desired)) return desired
+    const safe = name.replace(/[\\/:*?"<>|#^[\]]/g, '-').trim() || 'Shared folder'
+    let path = normalizePath(safe)
+    for (let i = 2; overlaps(path) || this.app.vault.getAbstractFileByPath(path); i++) path = normalizePath(`${safe} (${i})`)
+    return path
+  }
+
+  private async adoptShare (summary: ShareSummary): Promise<void> {
+    const identity = this.identity
+    if (!identity || this.adopting.has(summary.id) || this.shares[summary.id]) return
+    this.adopting.add(summary.id)
+    try {
+      const keyring = await openSharedKey(this.api, summary.id, identity.privateKey)
+      if (!keyring || this.shares[summary.id]) return
+      const cipher = new Cipher(keyring)
+      const name = await cipher.decryptText(`${summary.id}:share-name`, summary.nameEnc).catch(() => 'Shared folder')
+      const desired = summary.pathEnc ? await cipher.decryptText(`${summary.id}:share-path`, summary.pathEnc).catch(() => null) : null
+      const path = this.adoptPath(desired ? normalizePath(desired) : null, name, summary.id)
+      await this.io.ensureFolder(path)
+      const record: ShareRecord = { id: summary.id, name, path, role: summary.role }
+      this.shares[record.id] = record
+      await this.saveState()
+      new Notice(`Collaboration: “${name}” is shared from your other device, so it now syncs here too.`, 10000)
+      await this.startShare(record, keyring)
+    } catch (err) {
+      console.debug('[collaboration] could not add a share from another device', summary.id, err)
+    } finally {
+      this.adopting.delete(summary.id)
+    }
   }
 
   private async removeLocally (record: ShareRecord): Promise<void> {

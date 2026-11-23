@@ -143,6 +143,10 @@ export class Api {
     return this.json('GET', `/api/shares/${id}/key`)
   }
 
+  putKeyEnvelope (id: string, epoch: number, data: string): Promise<unknown> {
+    return this.json('PUT', `/api/shares/${id}/key`, { epoch, data })
+  }
+
   getInvite (token: string): Promise<InviteRecord> { return this.json('GET', `/api/invites/${encodeURIComponent(token)}`) }
 
   acceptInvite (token: string, nameEnc: string): Promise<ShareSummary> {

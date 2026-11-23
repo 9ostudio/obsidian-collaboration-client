@@ -10,6 +10,12 @@ import { applyToYText } from './merge'
 import type { Store, StoreOp } from './store'
 import { cancel, later, type Timer } from './timers'
 
+export async function openSharedKey (api: Api, shareId: string, privateKey: CryptoKey): Promise<Keyring | null> {
+  const { envelope } = await api.keyEnvelope(shareId)
+  if (!envelope) return null
+  return JSON.parse(fromUtf8(await openWithPrivateKey(privateKey, fromB64(envelope.data)))) as Keyring
+}
+
 export const REMOTE = { collaborationRemote: true }
 export const LOCAL = { collaborationLocal: true }
 const UI = { collaborationUi: true }
@@ -164,11 +170,13 @@ export class ShareSession {
 
   async load (): Promise<void> {
     const store = this.o.store
-    const [keyring, cursor, you] = await Promise.all([
+    const [keyring, cursor, you, selfEpoch] = await Promise.all([
       store.get<Keyring>('kv', 'keyring'),
       store.get<number>('kv', 'cursor'),
-      store.get<YouWire>('kv', 'you')
+      store.get<YouWire>('kv', 'you'),
+      store.get<number>('kv', 'self-envelope')
     ])
+    this.selfEpoch = selfEpoch ?? -1
     this.cipher = new Cipher(keyring ?? [])
     this.cursor = cursor ?? 0
     if (you) this.you = you
@@ -184,6 +192,16 @@ export class ShareSession {
   }
 
   private gaveUp = false
+  private selfEpoch = -1
+
+  async keepKeyForSelf (publicKey: string): Promise<void> {
+    const epoch = this.cipher.epoch
+    if (epoch === this.selfEpoch || !this.cipher.has(epoch)) return
+    const data = toB64(await sealForPublicKey(publicKey, utf8(JSON.stringify(this.cipher.ring))))
+    await this.o.api.putKeyEnvelope(this.shareId, epoch, data)
+    this.selfEpoch = epoch
+    this.queueOp({ table: 'kv', key: 'self-envelope', value: epoch })
+  }
 
   setKeyring (keyring: Keyring): void {
     this.cipher.setKeyring(keyring)
